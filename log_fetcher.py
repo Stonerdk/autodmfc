@@ -23,7 +23,7 @@ class RecentLogs:
             recent_mtime = recent_csv.stat().st_mtime
             recent_mtime_formatted = datetime.fromtimestamp(recent_mtime).strftime("%Y%m%d-%H:%M:%S")[9:]
             delta_currenttime = time.time() - recent_mtime
-            if (delta_currenttime > 15):
+            if (delta_currenttime > 60):
                 warning(port, f"최신 로그에 {int(delta_currenttime)}초 동안 로그가 작성되지 않았습니다.",
                 f"가장 마지막에 작성된 시간은 {recent_mtime_formatted}입니다.") # warning
             # TODO: 어떤 프로세스에서 이 파일을 직접 쓰고 있는지 확인할 수 있음
@@ -80,20 +80,21 @@ def check_is_valid_logfile(logfile, port):
             return False
     return prefixes
 
-def _store_sum_by_room(date, port, room, check_empty_intervals = False):
-    date = datetime.strftime(date, "%Y%m%d")
+def _store_sum_by_room(_date, port, room, check_empty_intervals = False):
+    date = datetime.strftime(_date, "%Y%m%d")
     cursor.execute("select * from dmfc_log where date=? and room=? order by time asc", (date, room))
     res = cursor.fetchall()
-    if not res:
-        warning(port, f"{date} 날짜의 데이터가 없습니다.")
-        return
     if check_empty_intervals:
-        times = [0, *map(lambda x: hms2sec(x[1]), res), 86399]
-        for idx, (t1, t2) in enumerate(pairwise(times)):
-            if (t2 - t1 > 10):
-                start = "00:00:00" if idx == 0 else res[idx - 1][1]
-                end = "23:59:59" if idx == len(times) - 2 else res[idx][1]
-                warning(port, f"{date} 날짜에 {start}부터 {end}까지 간격이 너무 깁니다.")
+        if not res:
+            warning(port, f"{date} 날짜의 데이터가 없습니다.")
+            return
+        if (_date.date() != datetime.now().date()): # 오늘이 아닐 경우
+            times = [0, *map(lambda x: hms2sec(x[1]), res), 86399]
+            for idx, (t1, t2) in enumerate(pairwise(times)):
+                if (t2 - t1 > 30):
+                    start = "00:00:00" if idx == 0 else res[idx - 1][1]
+                    end = "23:59:59" if idx == len(times) - 2 else res[idx][1]
+                    warning(port, f"{date} 날짜에 {start}부터 {end}까지 간격이 너무 깁니다.")
 
     dintegral = res[-1][6] - res[0][6]
     sumpv = sum(map(lambda x: x[3], res))
@@ -113,7 +114,6 @@ def store_to_db():
             rooms = check_is_valid_logfile(log, port)
             if not rooms:
                 continue
-            succeed(port, "로그 파일이 유효합니다.")
             with open(log, 'r', newline='') as file:
                 csv_reader = csv.reader(file)
                 next(csv_reader)
@@ -150,14 +150,24 @@ def store_to_db():
         succeed(None, "LOG 합계 DB에 성공적으로 데이터를 작성하였습니다.")
 
 def db_to_xlsx():
-    query = "SELECT * FROM dmfc_sum"
+    query = "SELECT Date, Room, IntSum FROM dmfc_sum order by Date asc"
     df = pd.read_sql_query(query, conn)
     df["Price"] = df["IntSum"].apply(calculate_price)
-    try:
-        df.to_excel('./usageSummary.xlsx', index=False, engine='openpyxl')
-    except PermissionError:
-        warning(None, "./usageSummary.xlsx 파일이 다른 프로그램에 의해 사용 중이거나 접근 권한이 없습니다.",
-                f"대신, ./usageSummary_{strftoday()}에 저장합니다.")
-        df.to_excel(f"./usageSummary_{strftoday()}.xlsx", index = False, engine='openpyxl')
+
+    temp_df = df.copy()
+    temp_df['Date'] = pd.to_datetime(temp_df['Date'])
+    temp_df['Year'] = temp_df['Date'].dt.year
+    temp_df['Month'] = temp_df['Date'].dt.month
+    temp_df['Week'] = temp_df['Date'] - pd.to_timedelta(temp_df['Date'].dt.weekday, unit='D')
+
+    month_df = temp_df.groupby(['Year', 'Month', 'Room']).agg({'IntSum': 'sum', 'Price': 'sum'}).reset_index()
+    week_df = temp_df.groupby(['Year', 'Week', 'Room']).agg({'IntSum': 'sum', 'Price': 'sum'}).reset_index()
+    week_df['Week'] = week_df['Week'].dt.strftime('%U주차 (%Y%m%d ~ ') + \
+        (week_df['Week'] + pd.to_timedelta(6 - week_df['Week'].dt.weekday, unit='D')).dt.strftime('%Y%m%d)')
+
+    with pd.ExcelWriter('./usageSummary.xlsx') as writer:
+        df.to_excel(writer, sheet_name="Daily", index=False)
+        week_df.to_excel(writer, sheet_name="Weekly", index=False)
+        month_df.to_excel(writer, sheet_name="Monthly", index=False)
         
     succeed(None, "합계 DB를 엑셀 파일로 변환하였습니다. usageSummary.xlsx에서 확인해 보세요.")

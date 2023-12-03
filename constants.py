@@ -1,3 +1,5 @@
+import configparser
+
 SANDBOXIE_DIR = 'C:"\\Program Files\\Sandboxie-Plus\\Start.exe"'
 DAILY_LOG_DIR = "./usageSummary.xlsx"
 DB_DIR = "./db/dmfc_log.db"
@@ -30,7 +32,11 @@ ROOMS = {
     7: ["3-307", "3-316", "3-322", "3-324", "3-315"]
 }
 
-MATTER_PRICE = 275
+
+config = configparser.ConfigParser()
+config.read('config.txt')
+price = config.get('MATERIAL','PRICE')
+MATTER_PRICE = float(price) if price else 275
 DENSITY = 0.7996
 
 def CMD(idx, app):
