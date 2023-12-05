@@ -1,4 +1,4 @@
-import configparser
+from configs import *
 
 SANDBOXIE_DIR = 'C:"\\Program Files\\Sandboxie-Plus\\Start.exe"'
 DAILY_LOG_DIR = "./usageSummary.xlsx"
@@ -25,19 +25,14 @@ BOX_OPTION = {
     7: "/box:port_com7"
 }
 
+MATTER_PRICE = PRICE
+
 ROOMS = {
-    4: ["4-403", "4-405", "4-407"],
-    5: ["2-211", "2-232"],
-    6: ["1-128", "1-113"],
-    7: ["3-307", "3-316", "3-322", "3-324", "3-315"]
+    4: PORT_4,
+    5: PORT_5,
+    6: PORT_6,
+    7: PORT_7
 }
-
-
-config = configparser.ConfigParser()
-config.read('config.txt')
-price = config.get('MATERIAL','PRICE')
-MATTER_PRICE = float(price) if price else 275
-DENSITY = 0.7996
 
 def CMD(idx, app):
     return f"{SANDBOXIE_DIR} {BOX_OPTION[idx]} {app}"

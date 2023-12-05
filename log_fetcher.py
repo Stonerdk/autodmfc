@@ -60,11 +60,10 @@ def check_is_valid_logfile(logfile, port):
         prefixes = [header[2 + idx * 4][:5] for idx in range(room_len) if header[2 + idx * 4]]
 
         if (sorted(prefixes) != sorted(ROOMS[port])):
-            error(port, f"로그파일에 기재된 호실이 정해진 호실(f{ROOMS[port]})과 일치하지 않습니다.", 
+            warning(port, f"로그파일에 기재된 호실이 정해진 호실(f{ROOMS[port]})과 일치하지 않습니다.", 
                   f"{port} 포트에서 실행되고 있는 DMFC의 Settings에서 포트가 COM {port}를 가리키고 있는지 확인하세요.")
-            return False
         
-        room_len = len(ROOMS[port]) # invariant
+        room_len = len(prefixes)
 
         suspicious_rows = []
         for row_idx, row in enumerate(csv_reader):
@@ -74,10 +73,9 @@ def check_is_valid_logfile(logfile, port):
                     suspicious_rows.append(row_idx)
                     break
         if suspicious_rows:
-            error(port, f"로그파일의 {", ".join(suspicious_rows)}번째 행의 열의 개수가 정해진 열의 개수", 
+            warning(port, f"로그파일의 {", ".join(suspicious_rows)}번째 행의 열의 개수가 정해진 열의 개수", 
                 f"({2 + 4 * room_len})가 아닙니다. 집계 도중 포트를 바꾼 것으로 추측됩니다.",
                 f"{port} 포트에서 실행되고 있는 DMFC의 Settings에서 포트가 COM {port}를 가리키고 있는지 확인하세요.")
-            return False
     return prefixes
 
 def _store_sum_by_room(_date, port, room, check_empty_intervals = False):
@@ -95,18 +93,18 @@ def _store_sum_by_room(_date, port, room, check_empty_intervals = False):
                     start = "00:00:00" if idx == 0 else res[idx - 1][1]
                     end = "23:59:59" if idx == len(times) - 2 else res[idx][1]
                     warning(port, f"{date} 날짜에 {start}부터 {end}까지 간격이 너무 깁니다.")
+    if res:
+        dintegral = res[-1][6] - res[0][6]
+        sumpv = sum(map(lambda x: x[3], res))
 
-    dintegral = res[-1][6] - res[0][6]
-    sumpv = sum(map(lambda x: x[3], res))
-
-    cursor.execute("select * from dmfc_sum where date=? and room=?", (date, room))
-    current = cursor.fetchall()
-    if current: # update
-        cursor.execute("update dmfc_sum set IntSum=?, PvSum=?, LatestTime=? where Date=? and Room=?", 
-                       (dintegral, sumpv, res[-1][1], date, room))
-    else:
-        cursor.execute("insert into dmfc_sum(Date, Room, IntSum, PvSum, LatestTime) values (?,?,?,?,?)",
-                       (date, room, dintegral, sumpv, res[-1][1]))
+        cursor.execute("select * from dmfc_sum where date=? and room=?", (date, room))
+        current = cursor.fetchall()
+        if current: # update
+            cursor.execute("update dmfc_sum set IntSum=?, PvSum=?, LatestTime=? where Date=? and Room=?", 
+                        (dintegral, sumpv, res[-1][1], date, room))
+        else:
+            cursor.execute("insert into dmfc_sum(Date, Room, IntSum, PvSum, LatestTime) values (?,?,?,?,?)",
+                        (date, room, dintegral, sumpv, res[-1][1]))
 
 def store_to_db():
     with RecentLogs() as logs:
@@ -149,10 +147,17 @@ def store_to_db():
         conn.commit()
         succeed(None, "LOG 합계 DB에 성공적으로 데이터를 작성하였습니다.")
 
+intsum_alias = "IntSum (L)"
+price_alias = "Price (원)"
+
 def db_to_xlsx():
     query = "SELECT Date, Room, IntSum FROM dmfc_sum order by Date asc"
     df = pd.read_sql_query(query, conn)
-    df["Price"] = df["IntSum"].apply(calculate_price)
+    df.rename(columns={"IntSum": intsum_alias}, inplace=True)
+    df = df.loc[df['Date'] != strftoday()]
+    df[price_alias] = df[intsum_alias].apply(calculate_price)
+    
+    agg_info = { intsum_alias: 'sum', price_alias: 'sum' }
 
     temp_df = df.copy()
     temp_df['Date'] = pd.to_datetime(temp_df['Date'])
@@ -160,14 +165,30 @@ def db_to_xlsx():
     temp_df['Month'] = temp_df['Date'].dt.month
     temp_df['Week'] = temp_df['Date'] - pd.to_timedelta(temp_df['Date'].dt.weekday, unit='D')
 
-    month_df = temp_df.groupby(['Year', 'Month', 'Room']).agg({'IntSum': 'sum', 'Price': 'sum'}).reset_index()
-    week_df = temp_df.groupby(['Year', 'Week', 'Room']).agg({'IntSum': 'sum', 'Price': 'sum'}).reset_index()
-    week_df['Week'] = week_df['Week'].dt.strftime('%U주차 (%Y%m%d ~ ') + \
-        (week_df['Week'] + pd.to_timedelta(6 - week_df['Week'].dt.weekday, unit='D')).dt.strftime('%Y%m%d)')
+    current_year = datetime.now().year
+    current_month = datetime.now().month
+    current_week = (datetime.now() - pd.to_timedelta(datetime.now().weekday(), unit='D')).date()
 
-    with pd.ExcelWriter('./usageSummary.xlsx') as writer:
-        df.to_excel(writer, sheet_name="Daily", index=False)
-        week_df.to_excel(writer, sheet_name="Weekly", index=False)
-        month_df.to_excel(writer, sheet_name="Monthly", index=False)
+    year_df = temp_df.groupby(['Year', 'Room']).agg(agg_info).reset_index()
+    year_df = year_df.loc[year_df['Year'] != current_year]
+    
+    month_df = temp_df.groupby(['Year', 'Month', 'Room']).agg(agg_info).reset_index()
+    month_df = month_df.loc[~((month_df['Year'] == current_year) & (month_df['Month'] == current_month))]
+
+    week_df = temp_df.groupby(['Year', 'Week', 'Room']).agg(agg_info).reset_index()
+    week_df = week_df.loc[~((week_df['Year'] == current_year) & \
+                            (week_df['Week'].dt.strftime("%Y%m%d") == current_week.strftime("%Y%m%d")))]
+    week_df['Week'] = week_df['Week'].dt.strftime('%U주차 (%Y%m%d ~ ') + \
+         (week_df['Week'] + pd.to_timedelta(6, unit='D')).dt.strftime('%Y%m%d)')
+    while True:
+        try:
+            with pd.ExcelWriter('./usageSummary.xlsx', mode='w') as writer:
+                df.to_excel(writer, sheet_name="일별", index=False)
+                week_df.to_excel(writer, sheet_name="주별", index=False)
+                month_df.to_excel(writer, sheet_name="월별", index=False)
+                year_df.to_excel(writer, sheet_name="연도별", index=False)
+            break
+        except PermissionError as e:
+            input(f"usageSummary.xlsx이 이미 열려 있어 엑셀에 작성할 수 없습니다. 파일을 닫고 Enter 키를 눌러 다시 시도하세요.")
         
     succeed(None, "합계 DB를 엑셀 파일로 변환하였습니다. usageSummary.xlsx에서 확인해 보세요.")

@@ -16,5 +16,5 @@ def hms2sec(hms_string):
     total_seconds = time_obj.hour * 3600 + time_obj.minute * 60 + time_obj.second
     return total_seconds
 
-def strftoday():
-    return datetime.now().strftime("%Y%m%d")
+def strftoday(format = "%Y%m%d"):
+    return datetime.now().strftime(format)
