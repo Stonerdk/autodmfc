@@ -95,10 +95,6 @@ def _store_sum_by_room(_date, port, room, check_empty_intervals = False):
                     warning(port, f"{date} 날짜에 {start}부터 {end}까지 간격이 너무 깁니다.")
     if res:
         dintegral = res[-1][6] - res[0][6]
-        for j in range(len(res) - 1):
-            if res[j][6] > res[j + 1][6]:
-                warning(port, f"{date} 날짜에 reset Intflow가 감지되었습니다..")
-                dintegral += res[j][6] - res[j + 1][6]
         sumpv = sum(map(lambda x: x[3], res))
 
         cursor.execute("select * from dmfc_sum where date=? and room=?", (date, room))
@@ -158,31 +154,26 @@ def db_to_xlsx():
     query = "SELECT Date, Room, IntSum FROM dmfc_sum order by Date asc"
     df = pd.read_sql_query(query, conn)
     df.rename(columns={"IntSum": intsum_alias}, inplace=True)
+    df = df.loc[df['Date'] != strftoday()]
     df[price_alias] = df[intsum_alias].apply(calculate_price)
     
     agg_info = { intsum_alias: 'sum', price_alias: 'sum' }
 
     temp_df = df.copy()
-    dates = pd.to_datetime(temp_df["Date"])
-    temp_df["Date"] = dates
-    temp_df['Year'] = dates.dt.year
-    most_recent_25th = dates - pd.to_timedelta(dates.dt.day - 25, unit='D')
-    temp_df["Month"] = most_recent_25th.where(dates.dt.day >= 25, most_recent_25th - pd.DateOffset(months=1))
-    temp_df['Week'] = dates - pd.to_timedelta(dates.dt.weekday, unit='D')
+    temp_df['Date'] = pd.to_datetime(temp_df['Date'])
+    temp_df['Year'] = temp_df['Date'].dt.year
+    temp_df['Month'] = temp_df['Date'].dt.month
+    temp_df['Week'] = temp_df['Date'] - pd.to_timedelta(temp_df['Date'].dt.weekday, unit='D')
 
     current_year = datetime.now().year
-    current_most_recent_25th = datetime.now() - pd.to_timedelta(datetime.now().day - 25, unit = 'D')
-    current_month = current_most_recent_25th if datetime.now().day >= 25 else current_most_recent_25th - pd.DateOffset(months=1)
+    current_month = datetime.now().month
     current_week = (datetime.now() - pd.to_timedelta(datetime.now().weekday(), unit='D')).date()
 
     year_df = temp_df.groupby(['Year', 'Room']).agg(agg_info).reset_index()
     year_df = year_df.loc[year_df['Year'] != current_year]
-
+    
     month_df = temp_df.groupby(['Year', 'Month', 'Room']).agg(agg_info).reset_index()
-    month_df = month_df.loc[~((month_df['Year'] == current_year) & \
-                    (month_df['Month'].dt.strftime("%Y%m%d") == current_month.strftime("%Y%m%d")))]
-    month_df["Month"] = month_df["Month"].dt.strftime("%Y%m%d ~ ") + \
-        (month_df["Month"] + pd.DateOffset(months=1) - pd.to_timedelta(1, unit='D')).dt.strftime("%Y%m%d")
+    month_df = month_df.loc[~((month_df['Year'] == current_year) & (month_df['Month'] == current_month))]
 
     week_df = temp_df.groupby(['Year', 'Week', 'Room']).agg(agg_info).reset_index()
     week_df = week_df.loc[~((week_df['Year'] == current_year) & \
