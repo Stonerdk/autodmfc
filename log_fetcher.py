@@ -5,15 +5,15 @@ import time
 from pathlib import Path
 from constants import LOG_DIR, ROOMS
 import pandas as pd
-from utils import hms2sec, pairwise, calculate_price, strftoday
+from utils import hms2sec, pairwise, calculate_price, calculate_kg, strftoday
 from datetime import datetime
 from dbutils import conn, cursor
 from error_logger import error, warning, succeed, verbose
 
 class RecentLogs:
     dests = []
-    def __enter__(self):
-        for port in [4, 5, 6, 7]:
+    def __enter__(self, ports = [4, 5, 6, 7]):
+        for port in ports:
             log_dir = Path(LOG_DIR[port])
             csv_files = list(log_dir.glob("*.csv"))
             if (not csv_files):
@@ -27,14 +27,14 @@ class RecentLogs:
                 warning(port, f"최신 로그에 {int(delta_currenttime)}초 동안 로그가 작성되지 않았습니다.",
                 f"가장 마지막에 작성된 시간은 {recent_mtime_formatted}입니다.") # warning
             # TODO: 어떤 프로세스에서 이 파일을 직접 쓰고 있는지 확인할 수 있음
-            start_date = recent_csv.name[:8]
-            dest_csv = f"./rmfc_logdata/port{port}_{start_date}.csv"
+            start_datetime = recent_csv.name[:8]
+            dest_csv = f"./rmfc_logdata/port{port}_{start_datetime}.csv"
             try:
                 shutil.copyfile(recent_csv, dest_csv)
             except Exception as e:
                 error(port, "최신 로그를 복사하던 중 얘기치 못한 오류가 발생하였습니다.", e)
                 continue
-            self.dests.append((dest_csv, port, start_date))
+            self.dests.append((dest_csv, port, start_datetime))
         return self
     
     def __exit__(self, exc_type, exc_value, traceback):
@@ -152,15 +152,17 @@ def store_to_db():
         succeed(None, "LOG 합계 DB에 성공적으로 데이터를 작성하였습니다.")
 
 intsum_alias = "IntSum (L)"
+weight_alias = "Weight (kg)"
 price_alias = "Price (원)"
 
 def db_to_xlsx():
     query = "SELECT Date, Room, IntSum FROM dmfc_sum order by Date asc"
     df = pd.read_sql_query(query, conn)
     df.rename(columns={"IntSum": intsum_alias}, inplace=True)
+    df[weight_alias] = df[intsum_alias].apply(calculate_kg)
     df[price_alias] = df[intsum_alias].apply(calculate_price)
-    
-    agg_info = { intsum_alias: 'sum', price_alias: 'sum' }
+
+    agg_info = { intsum_alias: 'sum', price_alias: 'sum', weight_alias: 'sum' }
 
     temp_df = df.copy()
     dates = pd.to_datetime(temp_df["Date"])

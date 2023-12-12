@@ -4,6 +4,9 @@ from constants import DENSITY, MATTER_PRICE
 def calculate_price(value):
     return value / 1000 / DENSITY * MATTER_PRICE
 
+def calculate_kg(value):
+    return value / 1000 / DENSITY
+
 def pairwise(iterable):
     iterator = iter(iterable)
     prev = next(iterator, None)
